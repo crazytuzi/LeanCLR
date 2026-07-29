@@ -132,8 +132,18 @@ public class LeanCLR : ModuleRules
 		}
 		else if (Target.Platform == UnrealTargetPlatform.Mac)
 		{
-			// TODO(TP-Mac): deliver libleanclr.a, then mirror the Linux branch (corlib needs no per-Mac
-			// copy — StageCorlib already sources the single vendored BCL).
+			// Mac has two archs under one UnrealTargetPlatform, so <Platform> is not Target.Platform.ToString()
+			// here; it is the arch dir, matching Mono/CoreCLR (macOS_x86_64 / macOS_arm64). Only arm64 is
+			// vendored today; the x86_64 dir stays unfilled until an Intel libleanclr.a is delivered.
+			var MacArch = Target.Architecture.bIsX64 ? "macOS_x86_64" : "macOS_arm64";
+
+			PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, "lib",
+				MacArch, LeanCLRConfiguration, "libleanclr.a"));
+
+			// No PublicSystemLibraries("dl"): on macOS dlopen/dlsym/dlclose live in libSystem (linked by
+			// default), unlike Linux which needs -ldl. corlib needs no per-Mac copy — StageCorlib sources
+			// the single vendored BCL and stages it under LeanCLR/Mac/net (Target.Platform.ToString()).
+			StageCorlib();
 		}
 		else if (Target.Platform == UnrealTargetPlatform.Android)
 		{
@@ -146,7 +156,16 @@ public class LeanCLR : ModuleRules
 		}
 		else if (Target.Platform == UnrealTargetPlatform.IOS)
 		{
-			// TODO(TP-iOS): deliver libleanclr.a, then mirror the Linux branch (same corlib source).
+			// iOS is arm64-only, so <Platform> is Target.Platform.ToString() ("IOS") — no arch split like Mac.
+			// Pure interpreter, zero executable-memory generation: no JIT, so iOS's W^X ban is a non-issue
+			// (LeanCLR's key mobile advantage over Mono/CoreCLR — no full AOT pipeline needed).
+			PublicAdditionalLibraries.Add(Path.Combine(ModuleDirectory, "lib",
+				Target.Platform.ToString(), LeanCLRConfiguration, "libleanclr.a"));
+
+			// No PublicSystemLibraries("dl"): on iOS dlopen/dlsym/dlclose live in libSystem (linked by
+			// default), same as macOS. corlib needs no per-iOS copy — StageCorlib sources the single
+			// vendored win-x64 BCL and stages it under LeanCLR/IOS/net (Target.Platform.ToString()).
+			StageCorlib();
 		}
 	}
 
