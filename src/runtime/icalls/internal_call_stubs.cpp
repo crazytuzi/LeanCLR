@@ -217,10 +217,6 @@ void InternalCallStubs::get_internal_call_entries(utils::Vector<vm::InternalCall
     Append(entries, SystemIOPath::get_internal_call_entries());
     Append(entries, SystemTextEncodingHelper::get_internal_call_entries());
     Append(entries, LeanCLRProfile::get_internal_call_entries());
-    // Opt-in only (Settings::set_native_console_write_line_enabled, off by default). Registering
-    // this overrides the managed System.Console::WriteLine(System.String) body, so the string
-    // never reaches Console.Out and a host's Console.SetOut() writer cannot see it. Bare hosts
-    // that just want a print without the CoreLib Console initialization path can turn it on.
     if (vm::Settings::get_native_console_write_line_enabled())
     {
         entries.push_back({"System.Console::WriteLine(System.String)", nullptr, console_write_line_string_invoker});

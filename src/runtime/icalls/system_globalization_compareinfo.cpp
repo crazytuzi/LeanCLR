@@ -11,7 +11,6 @@ namespace leanclr
 namespace icalls
 {
 
-// CompareOptions enum values
 enum class CompareOptions : int32_t
 {
     None = 0,
@@ -27,16 +26,15 @@ enum class CompareOptions : int32_t
 
 static bool options_ignore_case(int32_t options)
 {
-    return (options & (static_cast<int32_t>(CompareOptions::IgnoreCase) |
-                       static_cast<int32_t>(CompareOptions::OrdinalIgnoreCase))) != 0;
+    return (options & (static_cast<int32_t>(CompareOptions::IgnoreCase) | static_cast<int32_t>(CompareOptions::OrdinalIgnoreCase))) != 0;
 }
 
 RtResult<int32_t> SystemGlobalizationCompareInfo::internal_compare_icall(const char16_t* str1, int32_t length1, const char16_t* str2, int32_t length2,
                                                                          int32_t options) noexcept
 {
     assert(length1 >= 0 && length2 >= 0);
-    RET_OK(platform::nls::compare_ordinal(reinterpret_cast<const Utf16Char*>(str1), length1,
-                                          reinterpret_cast<const Utf16Char*>(str2), length2, options_ignore_case(options)));
+    RET_OK(platform::nls::compare_ordinal(reinterpret_cast<const Utf16Char*>(str1), length1, reinterpret_cast<const Utf16Char*>(str2), length2,
+                                          options_ignore_case(options)));
 }
 
 /// @icall: System.Globalization.CompareInfo::internal_compare_icall
@@ -61,34 +59,15 @@ RtResult<int32_t> SystemGlobalizationCompareInfo::internal_index_icall(const cha
         RET_OK(-1);
     }
 
-    // Mono semantics: `source_start_index` is the scan origin, which for a
-    // backwards search is the *last* index of the window, hence the asymmetric
-    // index arithmetic below. Kept verbatim; only the match test is shared.
-    if (first)
+    const int32_t window_start = first ? source_start_index : source_start_index + 1 - source_count;
+    if (window_start < 0)
     {
-        for (int32_t i = 0; i <= source_count - value_length; i++)
-        {
-            int32_t index = source_start_index + i;
-            if (platform::nls::equals_at(reinterpret_cast<const Utf16Char*>(source + index),
-                                         reinterpret_cast<const Utf16Char*>(value), value_length, false))
-            {
-                RET_OK(index);
-            }
-        }
+        RET_OK(-1);
     }
-    else
-    {
-        for (int32_t i = 0; i <= source_count - value_length; i++)
-        {
-            int32_t index = source_start_index + 1 - i - value_length;
-            if (platform::nls::equals_at(reinterpret_cast<const Utf16Char*>(source + index),
-                                         reinterpret_cast<const Utf16Char*>(value), value_length, false))
-            {
-                RET_OK(index);
-            }
-        }
-    }
-    RET_OK(-1);
+
+    const int32_t hit = platform::nls::index_of(reinterpret_cast<const Utf16Char*>(source + window_start), source_count,
+                                                reinterpret_cast<const Utf16Char*>(value), value_length, false, first);
+    RET_OK(hit < 0 ? -1 : window_start + hit);
 }
 
 /// @icall: System.Globalization.CompareInfo::internal_index_icall(System.Char*,System.Int32,System.Int32,System.Char*,System.Int32,System.Boolean)

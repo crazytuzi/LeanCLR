@@ -56,10 +56,8 @@ class Kernel32
     static bool set_file_attributes_private(vm::RtString* name, int32_t attributes);
     static bool set_file_information_by_handle(intptr_t h_file, int32_t file_information_class, void* file_information, uint32_t buffer_size);
 
-    // Cross-platform surface: called unconditionally from pinvokes/coreclr_qcall.cpp, so
-    // declared for every target. Windows impls are in the #ifdef LEANCLR_PLATFORM_WIN block
-    // of kernel32.cpp; POSIX impls (dlopen/dlsym/dlclose for the library ops; single-threaded
-    // no-ops for the lock primitives; not-implemented stubs for IOCP) are in the #ifndef block.
+    // Declared for every target because pinvokes/coreclr_qcall.cpp calls them unconditionally;
+    // the POSIX implementations live in the #ifndef LEANCLR_PLATFORM_WIN block of kernel32.cpp.
     static bool free_library(intptr_t h_module);
     static intptr_t load_library_ex(vm::RtString* lib_filename, intptr_t reserved, int32_t flags);
     static intptr_t load_library_ex(const Utf16Char* lib_filename, intptr_t reserved, int32_t flags);
@@ -84,12 +82,9 @@ class Kernel32
 #if LEANCLR_PLATFORM_WIN
     static bool set_thread_error_mode(uint32_t mode, uint32_t& old_mode);
 
-    /// Wraps FindFirstFileExW. Returns a Win32 HANDLE as intptr_t (INVALID_HANDLE_VALUE on failure).
     static intptr_t find_first_file_ex_private(vm::RtString* lp_file_name, uint32_t f_info_level_id, void* lp_find_file_data, uint32_t f_search_op,
                                                intptr_t lp_search_filter, int32_t dw_additional_flags);
 
-    /// Wraps GetTimeZoneInformation. @p lp_time_zone_information points at the managed
-    /// TIME_ZONE_INFORMATION layout (172 bytes, Unicode names).
     static uint32_t get_time_zone_information(void* lp_time_zone_information);
     static uint32_t get_dynamic_time_zone_information(void* lp_dynamic_tz);
 

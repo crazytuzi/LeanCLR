@@ -8,6 +8,7 @@
 #include "platform/bcrypt.h"
 #include "platform/nls_invariant.h"
 #include "platform/rt_io_error_internal.h"
+#include "platform/win32_error.h"
 #include "utils/string_builder.h"
 #include "utils/string_util.h"
 #include "vmutils/safehandle.h"
@@ -195,6 +196,14 @@ static intptr_t extract_safe_handle_raw_handle(vm::RtObject* safe_handle_obj)
 
 #ifndef LEANCLR_PLATFORM_WIN
 static int32_t s_last_win32_error = 0;
+
+static void set_last_win32_error_if_any(int32_t error)
+{
+    if (error != 0)
+    {
+        s_last_win32_error = error;
+    }
+}
 #endif
 
 int32_t RtSys::get_last_win32_error()
@@ -228,7 +237,7 @@ uint32_t RtSys::get_environment_variable(const Utf16Char* variable_name, Utf16Ch
 #else
     if (variable_name == nullptr)
     {
-        s_last_win32_error = 87; // ERROR_INVALID_PARAMETER
+        s_last_win32_error = win32_error::kErrorInvalidParameter;
         return 0;
     }
 
@@ -238,17 +247,15 @@ uint32_t RtSys::get_environment_variable(const Utf16Char* variable_name, Utf16Ch
     const char* found = ::getenv(name.get_const_chars());
     if (found == nullptr)
     {
-        s_last_win32_error = 203; // ERROR_ENVVAR_NOT_FOUND
+        s_last_win32_error = win32_error::kErrorEnvvarNotFound;
         return 0;
     }
 
     utils::Utf16StringBuilder found_utf16;
     found_utf16.append_utf8_str(found);
     const size_t found_length = found_utf16.length();
+    s_last_win32_error = win32_error::kErrorSuccess;
 
-    // GetEnvironmentVariableW semantics: on success the return value excludes
-    // the terminating null; when the buffer is too small (or absent) it is the
-    // required size *including* the null, and nothing is written.
     if (value == nullptr || static_cast<size_t>(value_length) <= found_length)
     {
         return static_cast<uint32_t>(found_length + 1);
@@ -275,7 +282,7 @@ int32_t RtSys::set_environment_variable(const Utf16Char* variable_name, const Ut
 #else
     if (variable_name == nullptr)
     {
-        s_last_win32_error = 87; // ERROR_INVALID_PARAMETER
+        s_last_win32_error = win32_error::kErrorInvalidParameter;
         return 0;
     }
 
@@ -505,10 +512,7 @@ int32_t RtSys::lc_map_string_ex(const Utf16Char* locale_name, uint32_t map_flags
 
     int32_t error = 0;
     const int32_t result = nls::win32::lc_map_string(map_flags, source, source_length, destination, destination_length, &error);
-    if (error != 0)
-    {
-        s_last_win32_error = error;
-    }
+    set_last_win32_error_if_any(error);
     return result;
 #endif
 }
@@ -525,21 +529,14 @@ int32_t RtSys::find_nls_string_ex(const Utf16Char* locale_name, uint32_t find_fl
                                                  static_cast<LPNLSVERSIONINFO>(version_information), reserved,
                                                  static_cast<LPARAM>(sort_handle)));
 #else
-    // Ordinal/invariant emulation. The previous stub returned -1
-    // unconditionally, which made every culture-sensitive
-    // StartsWith/EndsWith/IndexOf silently answer "no match" on POSIX.
     (void)locale_name;
     (void)version_information;
     (void)reserved;
     (void)sort_handle;
 
     int32_t error = 0;
-    const int32_t result =
-        nls::win32::find_nls_string(find_flags, source, source_length, value, value_length, found_length, &error);
-    if (error != 0)
-    {
-        s_last_win32_error = error;
-    }
+    const int32_t result = nls::win32::find_nls_string(find_flags, source, source_length, value, value_length, found_length, &error);
+    set_last_win32_error_if_any(error);
     return result;
 #endif
 }
@@ -554,12 +551,8 @@ int32_t RtSys::find_string_ordinal(uint32_t find_flags, const Utf16Char* source,
                                                    ignore_case != 0 ? TRUE : FALSE));
 #else
     int32_t error = 0;
-    const int32_t result =
-        nls::win32::find_string_ordinal(find_flags, source, source_length, value, value_length, ignore_case != 0, &error);
-    if (error != 0)
-    {
-        s_last_win32_error = error;
-    }
+    const int32_t result = nls::win32::find_string_ordinal(find_flags, source, source_length, value, value_length, ignore_case != 0, &error);
+    set_last_win32_error_if_any(error);
     return result;
 #endif
 }
@@ -575,21 +568,14 @@ int32_t RtSys::compare_string_ex(const Utf16Char* locale_name, uint32_t compare_
                                                  static_cast<LPNLSVERSIONINFO>(version_information), reserved,
                                                  static_cast<LPARAM>(sort_handle)));
 #else
-    // Ordinal/invariant emulation. The previous stub returned 0, which the
-    // managed side turns into `0 - 2 == -2`, i.e. "always less than" - a silent
-    // mis-ordering rather than an error.
     (void)locale_name;
     (void)version_information;
     (void)reserved;
     (void)sort_handle;
 
     int32_t error = 0;
-    const int32_t result =
-        nls::win32::compare_string(compare_flags, string1, string1_length, string2, string2_length, &error);
-    if (error != 0)
-    {
-        s_last_win32_error = error;
-    }
+    const int32_t result = nls::win32::compare_string(compare_flags, string1, string1_length, string2, string2_length, &error);
+    set_last_win32_error_if_any(error);
     return result;
 #endif
 }
@@ -1073,9 +1059,15 @@ int32_t RtSys::convert_error_platform_to_pal(int32_t error)
 #ifdef LEANCLR_PLATFORM_POSIX
 namespace
 {
-// Normalize both strerror_r signatures to "message pointer, or null on failure".
-inline const char* strerror_r_normalize(int rc, char* buf) { return rc == 0 ? buf : nullptr; }
-inline const char* strerror_r_normalize(char* ret, char* /*buf*/) { return ret; }
+inline const char* strerror_r_normalize(int rc, char* buf)
+{
+    return (rc == 0 || rc == ERANGE) ? buf : nullptr;
+}
+
+inline const char* strerror_r_normalize(char* ret, char* /*buf*/)
+{
+    return ret;
+}
 } // namespace
 #endif
 
@@ -1086,9 +1078,6 @@ uint8_t* RtSys::str_error_r(int32_t error, uint8_t* buffer, int32_t buffer_size)
         return nullptr;
 
     char* out = reinterpret_cast<char*>(buffer);
-    // strerror_r has two incompatible signatures across libcs: XSI/POSIX returns int, GNU
-    // returns char*. Which one is in scope depends on the libc *and* _GNU_SOURCE (bionic under
-    // _GNU_SOURCE exposes the char* form), so resolve by overload rather than macro guessing.
     const char* msg = strerror_r_normalize(::strerror_r(error, out, static_cast<size_t>(buffer_size)), out);
     if (msg == nullptr)
         return nullptr;

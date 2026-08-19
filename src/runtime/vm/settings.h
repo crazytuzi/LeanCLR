@@ -67,18 +67,6 @@ class Settings
     static void set_gc_mode(gc::GCMode mode);
     static gc::GCMode get_gc_mode();
 
-    // Native fast path for System.Console::WriteLine(System.String).
-    //
-    // When enabled, the runtime registers an internal call for that one overload which writes the
-    // string straight to the native stdout with std::printf, bypassing the managed
-    // System.Console implementation. That is useful for a bare host (AOT benchmark / tester) that
-    // wants a print without pulling in the CoreLib Console initialization path, but it also
-    // overrides the method for embedders: Console.SetOut() cannot intercept it, because the
-    // managed body that reads Console.Out never runs.
-    //
-    // Off by default, so Console.WriteLine(string) behaves like every other Console overload
-    // (Console.Out.WriteLine). Must be set before leanclr_initialize_runtime() /
-    // Runtime::initialize(), because the internal call table is built there.
     static void set_native_console_write_line_enabled(bool enabled);
     static bool get_native_console_write_line_enabled();
 };

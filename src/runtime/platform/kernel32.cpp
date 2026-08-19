@@ -9,17 +9,20 @@
 #endif
 
 #include "build_config.h"
+#include "log/internal_logger.h"
 #include "platform/rt_event.h"
 #include "platform/rt_file.h"
 #include "platform/rt_io_error_internal.h"
 #include "platform/rt_path.h"
 #include "platform/rt_sys.h"
 #include "platform/rt_time.h"
+#include "platform/win32_error.h"
 #include "utils/rt_vector.h"
 #include "utils/string_builder.h"
 #include "utils/string_util.h"
 #include "vm/rt_string.h"
 
+#include <cstdio>
 #include <cstring>
 
 #ifndef LEANCLR_PLATFORM_WIN
@@ -44,9 +47,12 @@ namespace
 {
 
 constexpr intptr_t kInvalidHandle = static_cast<intptr_t>(-1);
-constexpr int32_t kErrorInvalidHandle = 6;
-constexpr int32_t kErrorInvalidParameter = 87;
-constexpr int32_t kErrorCallNotImplemented = 120;
+using win32_error::kErrorCallNotImplemented;
+using win32_error::kErrorInvalidHandle;
+using win32_error::kErrorInvalidParameter;
+using win32_error::kErrorModNotFound;
+using win32_error::kErrorProcNotFound;
+using win32_error::kErrorTimeout;
 constexpr uint32_t kFileAttributeReadOnly = 0x00000001u;
 constexpr uint32_t kFileAttributeHidden = 0x00000002u;
 constexpr uint32_t kFileAttributeDirectory = 0x00000010u;
@@ -1813,65 +1819,104 @@ bool Kernel32::set_file_information_by_handle(intptr_t h_file, int32_t file_info
     }
 }
 
-// --- Dynamic library loading: POSIX dlopen/dlsym/dlclose ---
-// UE reverse bindings register their native entry points by name (register_pinvoke), so
-// these are only exercised by BCL-internal P/Invoke that names a shared object explicitly.
+namespace
+{
+void log_dl_failure(const char* what)
+{
+    const char* reason = ::dlerror();
+    char message[512];
+    std::snprintf(message, sizeof(message), "kernel32: %s failed: %s", what, reason != nullptr ? reason : "unknown error");
+    log::InternalLogger::warning(message);
+}
+} // namespace
+
 bool Kernel32::free_library(intptr_t h_module)
 {
     if (h_module == 0)
+    {
+        RtSys::set_last_win32_error(kErrorInvalidHandle);
         return false;
-    return ::dlclose(reinterpret_cast<void*>(h_module)) == 0;
+    }
+    const bool freed = ::dlclose(reinterpret_cast<void*>(h_module)) == 0;
+    if (!freed)
+    {
+        log_dl_failure("dlclose");
+        RtSys::set_last_win32_error(kErrorInvalidHandle);
+    }
+    return freed;
 }
 
 intptr_t Kernel32::load_library_ex(vm::RtString* lib_filename, intptr_t reserved, int32_t flags)
 {
     if (lib_filename == nullptr)
+    {
         return 0;
+    }
     return load_library_ex(vm::String::get_chars_ptr(lib_filename), reserved, flags);
 }
 
 intptr_t Kernel32::load_library_ex(const Utf16Char* lib_filename, intptr_t reserved, int32_t flags)
 {
     (void)reserved;
-    (void)flags; // Win32 LOAD_WITH_ALTERED_SEARCH_PATH / search-path flags have no POSIX analogue.
+    (void)flags;
     if (lib_filename == nullptr)
+    {
+        RtSys::set_last_win32_error(kErrorInvalidParameter);
         return 0;
+    }
     utils::Utf8StringBuilder path(lib_filename, static_cast<size_t>(utils::StringUtil::get_utf16chars_length(lib_filename)));
     path.sure_null_terminator_but_not_append();
     void* handle = ::dlopen(path.get_const_chars(), RTLD_NOW | RTLD_LOCAL);
-    RtSys::set_last_win32_error(handle != nullptr ? 0 : 126 /* ERROR_MOD_NOT_FOUND */);
+    if (handle == nullptr)
+    {
+        log_dl_failure("dlopen");
+    }
+    RtSys::set_last_win32_error(handle != nullptr ? 0 : kErrorModNotFound);
     return reinterpret_cast<intptr_t>(handle);
 }
 
 intptr_t Kernel32::get_proc_address(intptr_t h_module, const char* proc_name)
 {
     if (h_module == 0 || proc_name == nullptr)
+    {
+        RtSys::set_last_win32_error(kErrorInvalidParameter);
         return 0;
-    return reinterpret_cast<intptr_t>(::dlsym(reinterpret_cast<void*>(h_module), proc_name));
+    }
+    void* symbol = ::dlsym(reinterpret_cast<void*>(h_module), proc_name);
+    RtSys::set_last_win32_error(symbol != nullptr ? 0 : kErrorProcNotFound);
+    return reinterpret_cast<intptr_t>(symbol);
 }
 
-// --- Critical section / condition variable: single-threaded no-ops ---
-// The runtime is effectively single-threaded on non-Windows targets (rt_event set/reset are
-// no-ops, Interlocked is non-atomic, MemoryBarrier is a no-op). With one thread, mutual
-// exclusion is trivially satisfied, so these lock primitives do nothing. Registered
-// limitation (P7.4): if a target ever needs real preemptive concurrency this must become a
-// pthread implementation with a managed-side layout contract for the void* buffer.
-void Kernel32::initialize_critical_section(void*) {}
-void Kernel32::delete_critical_section(void*) {}
-void Kernel32::enter_critical_section(void*) {}
-void Kernel32::leave_critical_section(void*) {}
-void Kernel32::initialize_condition_variable(void*) {}
-
-bool Kernel32::sleep_condition_variable_cs(void*, void*, int32_t)
+void Kernel32::initialize_critical_section(void* /*critical_section*/)
 {
-    // Single-threaded: no other thread can signal. Report "signalled" so the caller
-    // re-checks its predicate instead of blocking forever.
-    return true;
 }
 
-void Kernel32::wake_condition_variable(void*) {}
+void Kernel32::delete_critical_section(void* /*critical_section*/)
+{
+}
 
-// --- I/O completion ports: no POSIX equivalent (registered limitation) ---
+void Kernel32::enter_critical_section(void* /*critical_section*/)
+{
+}
+
+void Kernel32::leave_critical_section(void* /*critical_section*/)
+{
+}
+
+void Kernel32::initialize_condition_variable(void* /*condition_variable*/)
+{
+}
+
+bool Kernel32::sleep_condition_variable_cs(void* /*condition_variable*/, void* /*critical_section*/, int32_t /*milliseconds*/)
+{
+    RtSys::set_last_win32_error(kErrorTimeout);
+    return false;
+}
+
+void Kernel32::wake_condition_variable(void* /*condition_variable*/)
+{
+}
+
 intptr_t Kernel32::create_io_completion_port(intptr_t, intptr_t, uintptr_t, int32_t)
 {
     RtSys::set_last_win32_error(kErrorCallNotImplemented);
@@ -1884,22 +1929,18 @@ bool Kernel32::post_queued_completion_status(intptr_t, uint32_t, uintptr_t, intp
     return false;
 }
 
-bool Kernel32::get_queued_completion_status(intptr_t, uint32_t* number_of_bytes_transferred, uintptr_t* completion_key, intptr_t* overlapped, int32_t)
+bool Kernel32::get_queued_completion_status(intptr_t, uint32_t*, uintptr_t*, intptr_t* overlapped, int32_t)
 {
-    if (number_of_bytes_transferred != nullptr)
-        *number_of_bytes_transferred = 0;
-    if (completion_key != nullptr)
-        *completion_key = 0;
     if (overlapped != nullptr)
+    {
         *overlapped = 0;
+    }
     RtSys::set_last_win32_error(kErrorCallNotImplemented);
     return false;
 }
 
-bool Kernel32::get_queued_completion_status_ex(intptr_t, void*, int32_t, int32_t* number_of_entries_removed, int32_t, int32_t)
+bool Kernel32::get_queued_completion_status_ex(intptr_t, void*, int32_t, int32_t*, int32_t, int32_t)
 {
-    if (number_of_entries_removed != nullptr)
-        *number_of_entries_removed = 0;
     RtSys::set_last_win32_error(kErrorCallNotImplemented);
     return false;
 }

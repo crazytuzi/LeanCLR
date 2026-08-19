@@ -32,10 +32,8 @@ static const metadata::RtAotModulesData* g_aot_modules_data = nullptr;
 
 static gc::GCMode g_gc_mode = gc::GCMode::ENABLED;
 
-// Off by default: System.Console::WriteLine(System.String) keeps its managed implementation
-// (Console.Out.WriteLine), which is what every other Console overload already does. See
-// Settings::set_native_console_write_line_enabled.
 static bool g_native_console_write_line_enabled = false;
+static bool g_native_console_write_line_consumed = false;
 
 static utils::Utf8StringBuilder g_debugger_log_buffer;
 
@@ -231,11 +229,13 @@ gc::GCMode Settings::get_gc_mode()
 
 void Settings::set_native_console_write_line_enabled(bool enabled)
 {
+    assert(!g_native_console_write_line_consumed || g_native_console_write_line_enabled == enabled);
     g_native_console_write_line_enabled = enabled;
 }
 
 bool Settings::get_native_console_write_line_enabled()
 {
+    g_native_console_write_line_consumed = true;
     return g_native_console_write_line_enabled;
 }
 } // namespace vm
