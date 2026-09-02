@@ -1,0 +1,103 @@
+#include "system_globalization_compareinfo.h"
+#include "icall_base.h"
+#include "platform/nls_invariant.h"
+
+#include <algorithm>
+#include <cassert>
+#include <cstring>
+
+namespace leanclr
+{
+namespace icalls
+{
+
+enum class CompareOptions : int32_t
+{
+    None = 0,
+    IgnoreCase = 1,
+    IgnoreNonSpace = 2,
+    IgnoreSymbols = 4,
+    IgnoreKanaType = 8,
+    IgnoreWidth = 0x10,
+    OrdinalIgnoreCase = 0x10000000,
+    StringSort = 0x20000000,
+    Ordinal = 0x40000000,
+};
+
+static bool options_ignore_case(int32_t options)
+{
+    return (options & (static_cast<int32_t>(CompareOptions::IgnoreCase) | static_cast<int32_t>(CompareOptions::OrdinalIgnoreCase))) != 0;
+}
+
+RtResult<int32_t> SystemGlobalizationCompareInfo::internal_compare_icall(const char16_t* str1, int32_t length1, const char16_t* str2, int32_t length2,
+                                                                         int32_t options) noexcept
+{
+    assert(length1 >= 0 && length2 >= 0);
+    RET_OK(platform::nls::compare_ordinal(reinterpret_cast<const Utf16Char*>(str1), length1, reinterpret_cast<const Utf16Char*>(str2), length2,
+                                          options_ignore_case(options)));
+}
+
+/// @icall: System.Globalization.CompareInfo::internal_compare_icall
+static RtResultVoid internal_compare_icall_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                                   interp::RtStackObject* ret) noexcept
+{
+    auto str1 = EvalStackOp::get_param<const char16_t*>(params, 0);
+    auto length1 = EvalStackOp::get_param<int32_t>(params, 1);
+    auto str2 = EvalStackOp::get_param<const char16_t*>(params, 2);
+    auto length2 = EvalStackOp::get_param<int32_t>(params, 3);
+    auto options = EvalStackOp::get_param<int32_t>(params, 4);
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(int32_t, result, SystemGlobalizationCompareInfo::internal_compare_icall(str1, length1, str2, length2, options));
+    EvalStackOp::set_return(ret, result);
+    RET_VOID_OK();
+}
+
+RtResult<int32_t> SystemGlobalizationCompareInfo::internal_index_icall(const char16_t* source, int32_t source_start_index, int32_t source_count,
+                                                                       const char16_t* value, int32_t value_length, bool first) noexcept
+{
+    if (source_count < value_length)
+    {
+        RET_OK(-1);
+    }
+
+    const int32_t window_start = first ? source_start_index : source_start_index + 1 - source_count;
+    if (window_start < 0)
+    {
+        RET_OK(-1);
+    }
+
+    const int32_t hit = platform::nls::index_of(reinterpret_cast<const Utf16Char*>(source + window_start), source_count,
+                                                reinterpret_cast<const Utf16Char*>(value), value_length, false, first);
+    RET_OK(hit < 0 ? -1 : window_start + hit);
+}
+
+/// @icall: System.Globalization.CompareInfo::internal_index_icall(System.Char*,System.Int32,System.Int32,System.Char*,System.Int32,System.Boolean)
+static RtResultVoid internal_index_icall_invoker(metadata::RtManagedMethodPointer, const metadata::RtMethodInfo*, const interp::RtStackObject* params,
+                                                 interp::RtStackObject* ret) noexcept
+{
+    auto source = EvalStackOp::get_param<const char16_t*>(params, 0);
+    auto source_start_index = EvalStackOp::get_param<int32_t>(params, 1);
+    auto source_count = EvalStackOp::get_param<int32_t>(params, 2);
+    auto value = EvalStackOp::get_param<const char16_t*>(params, 3);
+    auto value_length = EvalStackOp::get_param<int32_t>(params, 4);
+    auto first = EvalStackOp::get_param<bool>(params, 5);
+    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(
+        int32_t, result, SystemGlobalizationCompareInfo::internal_index_icall(source, source_start_index, source_count, value, value_length, first));
+    EvalStackOp::set_return(ret, result);
+    RET_VOID_OK();
+}
+
+static vm::InternalCallEntry s_internal_call_entries_system_globalization_compareinfo[] = {
+    {"System.Globalization.CompareInfo::internal_compare_icall", (vm::InternalCallFunction)&SystemGlobalizationCompareInfo::internal_compare_icall,
+     internal_compare_icall_invoker},
+    {"System.Globalization.CompareInfo::internal_index_icall(System.Char*,System.Int32,System.Int32,System.Char*,System.Int32,System.Boolean)",
+     (vm::InternalCallFunction)&SystemGlobalizationCompareInfo::internal_index_icall, internal_index_icall_invoker},
+};
+
+utils::Span<vm::InternalCallEntry> SystemGlobalizationCompareInfo::get_internal_call_entries() noexcept
+{
+    return utils::Span<vm::InternalCallEntry>(s_internal_call_entries_system_globalization_compareinfo,
+                                              sizeof(s_internal_call_entries_system_globalization_compareinfo) / sizeof(vm::InternalCallEntry));
+}
+
+} // namespace icalls
+} // namespace leanclr
