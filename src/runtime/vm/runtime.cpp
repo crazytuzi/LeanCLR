@@ -86,6 +86,15 @@ struct ScopeBufferGuard
     interp::RtStackObject ret_temp_buffer[kTempRetBufferSize];
     utils::Vector<void*> temp_byref_valuetype_args_buffer;
 
+    struct ByRefValueWriteBack
+    {
+        RtObject** boxed_slot;
+        RtObject* boxed;
+        const metadata::RtClass* param_klass;
+        void* buffer;
+    };
+    utils::Vector<ByRefValueWriteBack> byref_value_writebacks;
+
     ScopeBufferGuard() : args(nullptr), ret(nullptr), args_size(0), ret_size(0)
     {
     }
@@ -111,11 +120,43 @@ struct ScopeBufferGuard
         }
     }
 
-    void* alloc_zeroed_temp_value_type_buffer(size_t size)
+    void* alloc_zeroed_temp_value_type_buffer(const metadata::RtClass* param_klass, RtObject** boxed_slot, RtObject* boxed)
     {
-        void* buffer = alloc::GeneralAllocation::malloc_zeroed(size);
+        void* buffer = alloc::GeneralAllocation::malloc_zeroed(param_klass->instance_size_without_header);
         temp_byref_valuetype_args_buffer.push_back(buffer);
+        byref_value_writebacks.push_back({boxed_slot, boxed, param_klass, buffer});
         return buffer;
+    }
+
+    RtResultVoid write_back_byref_value_types()
+    {
+        for (const auto& wb : byref_value_writebacks)
+        {
+            if (Class::is_nullable_type(wb.param_klass))
+            {
+                const uint8_t* buffer_bytes = static_cast<const uint8_t*>(wb.buffer);
+                if (buffer_bytes[Field::get_nullable_has_value_field(wb.param_klass)->offset] == 0)
+                {
+                    *wb.boxed_slot = nullptr;
+                }
+                else
+                {
+                    metadata::RtClass* underlying = Class::get_nullable_underlying_class(wb.param_klass);
+                    uint32_t value_offset = Field::get_nullable_value_field(wb.param_klass)->offset;
+                    DECLARING_AND_UNWRAP_OR_RET_ERR_ON_FAIL(
+                        RtObject*, boxed,
+                        LEANCLR_BOX_OBJECT_INTERNAL(underlying, buffer_bytes + value_offset, "ScopeBufferGuard::write_back_byref_value_types"));
+                    *wb.boxed_slot = boxed;
+                }
+            }
+            else if (wb.boxed != nullptr)
+            {
+                std::memcpy(const_cast<void*>(Object::get_box_value_type_data_ptr(wb.boxed)), wb.buffer,
+                            wb.param_klass->instance_size_without_header);
+            }
+        }
+
+        RET_VOID_OK();
     }
 
     struct ArgsAndRetBuffers
@@ -325,7 +366,7 @@ struct ScopeBufferGuard
             {
                 if (Class::is_value_type(param_klass))
                 {
-                    void* buffer = alloc_zeroed_temp_value_type_buffer(param_klass->instance_size_without_header);
+                    void* buffer = alloc_zeroed_temp_value_type_buffer(param_klass, &params[i], param);
                     RET_ERR_ON_FAIL(Object::unbox_any(param, param_klass, buffer, false));
                     dst.ptr = buffer;
                     if (std::getenv("LEANCLR_REFLECTION_INVOKE_TRACE") != nullptr)
@@ -619,6 +660,8 @@ RtResult<RtObject*> Runtime::invoke_object_arguments_without_run_cctor(const met
     // Invoke the method
     auto invoke_ptr = CAST_AS_NOEXCEP_INVOKE_METHOD_POINTER(actual_method->invoke_method_ptr);
     RET_ERR_ON_FAIL(invoke_ptr(actual_method->method_ptr, actual_method, arg_buffer, ret_buffer));
+
+    RET_ERR_ON_FAIL(guard.write_back_byref_value_types());
 
     if (return_instance)
     {
